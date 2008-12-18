@@ -1,0 +1,12 @@
+Manifest-Version: 1.0
+Bundle-ManifestVersion: 2
+Bundle-Name: Slf4j_test_bundle Plug-in
+Bundle-SymbolicName: net.kornr.log.slf4j_test_bundle
+Bundle-Version: 1.0.0
+Bundle-Activator: slf4jtest.Activator
+Import-Package: org.osgi.framework,
+ org.osgi.service.log
+Bundle-RequiredExecutionEnvironment: JavaSE-1.6
+Bundle-ClassPath: slf4j-20081217.jar,
+ slf4j-api-1.5.6.jar,
+ .

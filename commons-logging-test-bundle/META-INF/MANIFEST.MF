@@ -1,0 +1,12 @@
+Manifest-Version: 1.0
+Bundle-ManifestVersion: 2
+Bundle-Name: Commons_logging_test_bundle Plug-in
+Bundle-SymbolicName: net.kornr.log.commons_logging_test_bundle
+Bundle-Version: 1.0.0
+Bundle-Activator: commons_logging_test_bundle.Activator
+Import-Package: org.osgi.framework,
+ org.osgi.service.log
+Bundle-RequiredExecutionEnvironment: JavaSE-1.6
+Bundle-ClassPath: commons-logging-1.1.1.jar,
+ commons-logging-osgi-20081217.jar,
+ .

@@ -1,0 +1,51 @@
+<project name="LogbackBundle" default="dist" basedir=".">
+	<description>
+		Logback-based back-end logging for OSGi
+    </description>
+	<property name="name" value="LogbackBundle" />
+	<property name="version" value="1.0" />
+	
+	<!-- set global properties for this build -->
+	<property name="src" location="src" />
+	<property name="bin" location="bin" />
+	<property name="dist" location="dist" />
+
+	<target name="init">
+		<!-- Create the time stamp -->
+		<tstamp />
+		<!-- Create the build directory structure used by compile -->
+		<mkdir dir="${bin}" />
+	</target>
+
+	<target name="compile" depends="init" description="compile the source ">
+		<!-- Compile the java code from ${src} into ${build} -->
+		<javac srcdir="${src}" destdir="${bin}" source="1.5" target="1.5">
+			<classpath>
+				<pathelement location="libs/logback-classic-0.9.13.jar" />
+				<pathelement location="libs/logback-core-0.9.13.jar" />
+				<pathelement location="libs/slf4j-api-1.5.6.jar" />
+				<pathelement location="libs/org.osgi.core-1.2.0.jar" />
+				<pathelement location="libs/org.osgi.compendium-1.2.0.jar" />
+			</classpath>
+		</javac>
+	</target>
+
+	<target name="dist" depends="clean, compile" description="generate the distribution">
+		<!-- Create the distribution directory -->
+		<mkdir dir="${dist}" />
+		<jar jarfile="${dist}/${name}-${version}.jar" manifest="META-INF/MANIFEST.MF">
+			<fileset dir="${bin}" />
+			<fileset dir=".">
+			 <include name="libs/logback-classic-0.9.13.jar" />
+			 <include name="libs/logback-core-0.9.13.jar" />
+			 <include name="libs/slf4j-api-1.5.6.jar" />
+			</fileset>
+		</jar>
+	</target>
+
+	<target name="clean" description="clean up">
+		<delete dir="${bin}" />
+		<delete dir="${dist}" />
+		<mkdir dir="${bin}" />
+	</target>
+</project>
