@@ -22,7 +22,7 @@
 		<javac srcdir="${src}" destdir="${bin}" source="1.3" target="1.3">
 			<classpath>
 				<pathelement location="commons-logging-1.1.1.jar" />
-				<pathelement location="commons-logging-osgi-20081217.jar" />
+				<pathelement location="commons-logging-osgi-1.0.jar" />
 				<pathelement location="org.osgi.core-1.2.0.jar" />
 			</classpath>
 		</javac>
@@ -35,7 +35,7 @@
 			<fileset dir="${bin}" />
 			<fileset dir=".">
 			 <include name="commons-logging-1.1.1.jar" />
-			 <include name="commons-logging-osgi-20081217.jar" />
+			 <include name="commons-logging-osgi-1.0.jar" />
 			</fileset>
 		</jar>
 	</target>
