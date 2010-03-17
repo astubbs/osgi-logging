@@ -1,0 +1,211 @@
+#summary Understanding the OSGI logging service (1/4)
+
+The OSGI specifications provide a description of the Log Service as a very simplistic set of classes, none of them providing any method related to how the logs are stored or displayed. As a consequence, the logging service is often seen as a unusable toy-like API, far from the level of maturity of log4j (to name the most common logging API).
+
+This is not only very unfair, but also leads developpers to use the Log4j API with a naive OSGI bundling, often implemented as an Activator managing the log4j configuration, and even worse, to still link against it using static logging methods instead of using the standard OSGI logging service.
+
+The misunderstanding mainly comes from the fact that developers expect the logservice to be a fully-featured logging service, while in fact it only defines a front-end API to be used by bundles. The logging back-end, or how the log entries are displayed, stored, or processed are currently not defined by the OSGI specifications. Is it an issue? Yes and no, it certainly is consistent from an architecture point of view to exclude the back-end logging services from the specifications, however on a more pragmatic level it didn't exactly help the LogService usage spread as widely as it should have.
+
+Anyway, let's have a glance at a typical OSGI server and its bundles. Some bundles are pure services (such as the logging or the configuration service), while others are applicative bundles that use the osgi server as a standard application server.
+
+[http://sites.google.com/site/osgistuff/Home/osgi-1.png]
+
+Figure 1 shows how bundles use the LogService, without any direct relationship with the back-end logging services.
+The figure shows some example of possible LogListener elements:
+
+    * a ConsoleLog logging on the console
+    * a RotatingFileLog, logging in a file, rotating the file name.
+    * an EmailAlertLog, sending an alert email to the administrator when an error log is propagated.
+
+The approach taken by OSGI enforces the separation of concerns: applications should only know how to send their logs to the log service; the OSGI administrator (the human being, not some service) takes care of managing the logging back-ends, and sets the logs up according to a server-specific logging strategy. To make a parallel with log4J, while in log4j you set up a centralized configuration file, and have a thread watch it for changes ("configureAndWatch()"), with the OSGI architecture you would rather hot-plug and unplug the logging back-end services, and reconfigure them dynamically when needed (typically, changing a configuration file, then stop/starting the service).
+
+Note that, as we are in the OSGI world, the back-end logging strategy can be defined not only in terms of packages and classes (as standard java APIs do), but also in terms of services and bundles. This higher-level view is a major benefit provided by the model, and is much more convenient than packages for many use cases. However, as a drawback, there is currently no filter at the logservice level to prevent the log entries to be propagated to all the log listeners.
+
+As for logging back-ends, even if the lack of service available in bundle repositories may be disappointing, let's take it as an exercice left to the developers, and let's build a simple Console back-end. Our objective here is to use a logging architecture as showed in figure 1, with a standard LogService and a sample implementation of ConsoleLog.
+
+First, we need to have a fully-compliant LogService implementation. If your framework doesn't provide one, you can easily install the one available from the oscar repository, by typing the following command:
+
+install http://oscar-osgi.sf.net/repo/log/log.jar
+
+Now, let's write a LogTester. For the sake of simplicity, we're going to use an Activator making a single log call only if it can find a LogService available at startup :
+
+{{{
+import org.osgi.framework.BundleActivator;
+import org.osgi.framework.BundleContext;
+import org.osgi.util.tracker.ServiceTracker;
+import org.osgi.service.log.*;
+
+public class Activator implements BundleActivator
+{
+    public void start(BundleContext context) throws Exception {
+        ServiceTracker logServiceTracker = new ServiceTracker(context, org.osgi.service.log.LogService.class.getName(), null);
+        logServiceTracker.open();
+        LogService logservice = (LogService) logServiceTracker.getService();
+       
+        if (logservice != null)
+            logservice.log(LogService.LOG_INFO, "hey, I logged that!");
+    }
+   
+    public void stop(BundleContext context) throws Exception {
+    }
+}
+}}}
+To test the log, just stop/start it. Alternatively, you can also create a thread that logs something every few seconds.
+
+If you start both LogService and LogTester, nothing should be displayed yet, because we still need a LogReaderService to do something useful with the LogEntry object implicitly created by the log() call.
+
+In another bundle, which I'll call "ConsoleLog", let's create a class implementing LogListener, and make it echo the log message on System.out:
+
+{{{
+import org.osgi.service.log.LogEntry;
+import org.osgi.service.log.LogListener;
+
+public class ConsoleLogImpl implements LogListener
+{
+    public void logged(LogEntry log)
+    {
+        if (log.getMessage() != null)
+            System.out.println("[" + log.getBundle().getSymbolicName() + "] " + log.getMessage());
+
+    }
+}
+}}}
+
+Then, we need the Activator responsible for registering our LogListener with all the logging service available on the server. The Activator below does mainly 3 things:
+- In the start() method, it registers the ConsoleLogImpl object to all the LogReaderService available at the time of the method call.
+- In the start() method, it also registers a ServiceListener (namely m_servlistener) that adds or remove the ConsoleLogImpl object to all the LogReaderService elements that are started or stopped (respectively).
+- In the stop() method, it unregisters the ConsoleLogImpl from LogReaderService objects that are still active on the server.
+
+{{{
+import java.util.Iterator;
+import java.util.LinkedList;
+import org.osgi.framework.BundleActivator;
+import org.osgi.framework.BundleContext;
+import org.osgi.framework.InvalidSyntaxException;
+import org.osgi.framework.ServiceEvent;
+import org.osgi.framework.ServiceListener;
+import org.osgi.service.log.LogReaderService;
+import org.osgi.util.tracker.ServiceTracker;
+
+public class StdOutActivator implements BundleActivator
+{
+    private ConsoleLogImpl m_console = new ConsoleLogImpl();
+    private LinkedList<LogReaderService> m_readers = new LinkedList<LogReaderService>();
+
+    //  We use a ServiceListener to dynamically keep track of all the LogReaderService service being
+    //  registered or unregistered
+    private ServiceListener m_servlistener = new ServiceListener() {
+        public void serviceChanged(ServiceEvent event)
+        {
+            BundleContext bc = event.getServiceReference().getBundle().getBundleContext();
+            LogReaderService lrs = (LogReaderService)bc.getService(event.getServiceReference());
+            if (lrs != null)
+            {
+                if (event.getType() == ServiceEvent.REGISTERED)
+                {
+                    m_readers.add(lrs);
+                    lrs.addLogListener(m_console);
+                } else if (event.getType() == ServiceEvent.UNREGISTERING)
+                {
+                    lrs.removeLogListener(m_console);
+                    m_readers.remove(lrs);
+                }
+            }
+        }
+    };
+
+    public void start(BundleContext context) throws Exception
+    {
+        // Get a list of all the registered LogReaderService, and add the console listener
+        ServiceTracker logReaderTracker = new ServiceTracker(context, org.osgi.service.log.LogReaderService.class.getName(), null);
+        logReaderTracker.open();
+        Object[] readers = logReaderTracker.getServices();
+        if (readers != null)
+        {
+            for (int i=0; i<readers.length; i++)
+            {
+                LogReaderService lrs = (LogReaderService)readers[i];
+                m_readers.add(lrs);
+                lrs.addLogListener(m_console);
+            }
+        }
+
+        logReaderTracker.close();
+       
+        // Add the ServiceListener, but with a filter so that we only receive events related to LogReaderService
+        String filter = "(objectclass=" + LogReaderService.class.getName() + ")";
+        try {
+            context.addServiceListener(m_servlistener, filter);
+        } catch (InvalidSyntaxException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public void stop(BundleContext context) throws Exception
+    {
+        for (Iterator<LogReaderService> i = m_readers.iterator(); i.hasNext(); )
+        {
+            LogReaderService lrs = i.next();
+            lrs.removeLogListener(m_console);
+            i.remove();
+        }
+    }
+
+}
+}}}
+
+In order to test, install and start the LogService and the ConsoleLog services (in any order). Then install and start/stop the LogTester bundle. Every time it starts, it echoes a message. Now, stop the ConsoleLog, and stop/start the LogTester, nothing is displayed.
+
+A sample session with the Felix server:
+
+{{{
+M:\felix-1.4.0>java -jar bin\felix.jar
+
+Welcome to Felix.
+=================
+
+-> ps
+START LEVEL 1
+   ID   State         Level  Name
+[   0] [Active     ] [    0] System Bundle (1.4.0)
+[   1] [Active     ] [    1] Apache Felix Shell Service (1.0.2)
+[   2] [Active     ] [    1] Apache Felix Shell TUI (1.0.2)
+[   3] [Active     ] [    1] Apache Felix Bundle Repository (1.2.1)
+-> install file:///plugins/ConsoleLog_1.0.0.jar
+Bundle ID: 16
+-> install file:///plugins/LogTester_1.0.0.jar
+Bundle ID: 17
+-> install file:///plugins/log.jar
+Bundle ID: 18
+-> ps
+START LEVEL 1
+   ID   State         Level  Name
+[   0] [Active     ] [    0] System Bundle (1.4.0)
+[   1] [Active     ] [    1] Apache Felix Shell Service (1.0.2)
+[   2] [Active     ] [    1] Apache Felix Shell TUI (1.0.2)
+[   3] [Active     ] [    1] Apache Felix Bundle Repository (1.2.1)
+[  16] [Installed  ] [    1] KornrLoggingBackend Plug-in (1.0.0)
+[  17] [Installed  ] [    1] LogTester Plug-in (1.0.0)
+[  18] [Installed  ] [    1] Log Service (1.0.0)
+-> start 16
+-> start 17
+-> start 18
+*[null] BundleEvent.STARTED*
+-> stop 17
+*[LogTester] BundleEvent.STOPPED*
+-> start 17
+*[LogTester] hey, I logged that!*
+*[LogTester] BundleEvent.STARTED*
+-> stop 17
+*[LogTester] BundleEvent.STOPPED*
+->
+}}}
+
+The highlighted lines were output by the ConsoleLog plugin. Of course, the LogTester and ConsoleLog bundles aforementionned work perfectly on Eclipse, on which they were developped (see figure 2 below).
+
+[http://sites.google.com/site/osgistuff/Home/osgi-2.png]
+
+You can download the project files:
+
+ * ConsoleLog: Source and bundle
+ * LogTester: Source and bundle

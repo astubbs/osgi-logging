@@ -1,0 +1,184 @@
+#summary OSGi logging: putting it all together  (4/4)
+
+In a componentized world such as OSGi, logging is not anymore a matter of instanciating a logger and using it, it's become a strict procedure which starts with requesting a reference to the logging service, checking that the service is available, and finally calling its methods. I know, all this sounds like a cheesy overhead just for some stupid logging, while all we want is living the simple life of POJO. But it's not just about logging here, it's about having a dynamic environment, being able to dynamically start, stop, update, and change any service without other components having to worry about it. And fortunately, OSGi manages to keep it simple.
+
+I've started my series about logging in OSGi out of the sad notice that most blog entries and comments just missed the point and had an erroneous idea of logging on OSGi, mainly because they are trying to use log4j or the java.logging API as they are used to, without taking into account the drastic change of architecture imposed by the OSGI component model. 
+
+For instance, implementing a LogService hard-coded to bind on logback or log4j (or any specific engine) is definitely a bad idea: OSGi is all about dynamic component, and the way to go is to build a LogListener backed by logback or log4j, and let it connect to the LogReaderService. That way, not only can we easily *swap* the component in charge of storing/processing the logs, but we can also *combine* several of them if needed.
+
+This is what should be avoided:
+
+[http://sites.google.com/site/osgistuff/Home/osgi-wrong.png]
+
+Unfortunately, most logging libraries are done like that, including Pax Logging or the bundles provided for slf4j or logback.
+
+On the other hand, a logging architecture that fits the dynamic component model proposed by OSGi should rather look like this:
+
+[http://1571617898373253522-a-1802744773732722657-s-sites.googlegroups.com/site/osgistuff/Home/osgi-workflow.png]
+
+Note how this architecture respects what we expects of components: dynamically updateable, swappable and combinable.
+
+= Building the bundles =
+
+If your bundle only contains your own code and has no dependency on third-party libraries, you may just use the LogService straight. However, even in this case, it's still more convenient to use one of the two facades provided below (commons-logging or sl4j): not only will your code be able to run in a non-OSGi compliant environment as well, but the libraries provided here will take care of managing the log services available on the server. 
+
+However, chances are that your code links to some jar that use either commons-logging or slf4j. In this case, including one of the bridge-to-osgi libraries provided below should be enough to OSGi-fy them. Those OSGi bridge libraries must be privately loaded from the bundle, because they use static variable that are not meant to be shared across the boundaries of bundles. To ensure this constraint is respected, verify they are not loaded from the global classpath of the server (there's no reason to find them there anyway), and use the Bundle-Classpath property in the manifest to have the OSGI server load them with the classloader of the bundle.
+
+Each of these OSGi bridge MUST be initialized from the Activator class of your bundle. There's one good reason for that: they need a valid BundleContext object, which is provided by the framework to the Activator's start() method. The beginning of the start() method is a good place for this initialization.
+
+== for SLF4J ==
+
+Initialize with the following line in your {{{Activator.start()}}} method:
+
+for slf4j:
+{{{ 
+org.slf4j.impl.OSGILogFactory.initOSGI(context); 
+}}}
+
+[http://sites.google.com/site/osgistuff/Home/osgi-slf4j-bundle.png]
+
+== for Commons-Logging ==
+
+Initialize with the following line in your {{{Activator.start()}}} method:
+{{{ 
+net.kornr.osgi.jcl.LogOSGIFactory.initOSGI(context); 
+}}}
+
+[http://sites.google.com/site/osgistuff/Home/osgi-commons-logging-bundle.png]
+
+Note the extra step for the commons-logging: a system property must be set up to give an indication to the library of the factory class to use to create the loggers:
+
+{{{ java -Dorg.apache.commons.logging.LogFactory=net.kornr.osgi.jcl.LogOSGIFactory ... }}}
+(the -D is a command line flag used to set a system-wide property).
+
+If your bundle needs to use both libraries, just call both initializing methods, and include both jars.
+
+
+= Configuring the Logback bundle =
+
+In the previous part of the series, I've shown how to create an OSGi bundle for Logback (the Log4J's successor). We'll just use it and set up a configuration file (please refer to the article if you need further technical details). You can skip the config file part if the default log-all-to-stdout is fine for you.
+
+For instance, given the following configuration file at location /tmp/config.xml:
+
+{{{
+<configuration>
+
+  <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <layout class="ch.qos.logback.classic.PatternLayout">
+      <Pattern>%d{HH:mm:ss} %-5level %logger{36} - %msg%n</Pattern>
+    </layout>
+  </appender>
+
+  <logger name="net.kornr.log.commons_logging_test_bundle" level="warn">
+  </logger>
+
+  <logger name="net.kornr.log.slf4j_test_bundle" level="error">
+  </logger>
+
+  <!-- Strictly speaking, the level attribute is not necessary since -->
+  <!-- the level of the root level is set to DEBUG by default.       -->
+  <root level="info">
+    <appender-ref ref="STDOUT" />
+  </root>  
+  
+</configuration>
+}}}
+
+To let logback be aware of this configuration file, define the logback.configurationFile property as follows:
+
+{{{ 
+java -Dlogback.configurationFile=/tmp/config.xml ...
+}}}
+
+The loggers name referenced in file are the symbolic bundle name, and you can adjust the logging properties of each of them; please refer to the logback documentation for the details.
+
+= Testing everything =
+
+You can quickly test the configuration from a blank felix installation. 
+To install the bundles directly from the OSGi shell, use the following commands:
+
+ * {{{ install http://oscar-osgi.sf.net/repo/log/log.jar }}} to install a LogService (if there is not already one installed)
+
+ * {{{ install http://osgi-logging.googlecode.com/files/LogbackBundle-1.0.jar }}} to install the Logback-based LogListener back-end.
+
+ * {{{ install http://osgi-logging.googlecode.com/files/commons-logging-osgi-test-bundle-1.0.jar }}} to install a log tester using the commons-logging-osgi bridge. It generates logs every few seconds (Warning: it really generates LOADS of logs, I should probably fix that)
+
+ *  {{{ http://osgi-logging.googlecode.com/files/slf4j-osgi-test-bundle-1.0.jar }}} to install a log tester using the slf4j API (comments above apply on this bundle as well)
+
+Please see below for a session using the Felix OSGi server:
+
+{{{ 
+c:\temp\felix-1.4.0>java -Dorg.apache.commons.logging.LogFactory=net.kornr.osgi.jcl.LogOSGIFactory -jar bin\felix.jar
+
+Welcome to Felix.
+=================
+
+-> ps
+START LEVEL 1
+   ID   State         Level  Name
+[   0] [Active     ] [    0] System Bundle (1.4.0)
+[   1] [Active     ] [    1] Apache Felix Shell Service (1.0.2)
+[   2] [Active     ] [    1] Apache Felix Shell TUI (1.0.2)
+[   3] [Active     ] [    1] Apache Felix Bundle Repository (1.2.1)
+-> install http://oscar-osgi.sf.net/repo/log/log.jar
+Bundle ID: 4
+-> install http://osgi-logging.googlecode.com/files/LogbackBundle-1.0.jar
+Bundle ID: 5
+-> install http://osgi-logging.googlecode.com/files/commons-logging-osgi-test-bundle-1.0.jar
+Bundle ID: 6
+-> ps
+START LEVEL 1
+   ID   State         Level  Name
+[   0] [Active     ] [    0] System Bundle (1.4.0)
+[   1] [Active     ] [    1] Apache Felix Shell Service (1.0.2)
+[   2] [Active     ] [    1] Apache Felix Shell TUI (1.0.2)
+[   3] [Active     ] [    1] Apache Felix Bundle Repository (1.2.1)
+[   4] [Installed  ] [    1] Log Service (1.0.0)
+[   5] [Installed  ] [    1] LogBackend (1.0.0)
+[   6] [Installed  ] [    1] Commons_logging_test_bundle Plug-in (1.0.0)
+-> start 4
+-> start 5
+-> 21:59:13.861 [Thread-1] INFO  LogBackend - BundleEvent.STARTED
+start 6
+21:59:20.901 [Thread-1] INFO  n.k.log.commons_logging_test_bundle - null
+-> 21:59:20.942 [Thread-1] INFO  n.k.log.commons_logging_test_bundle - BundleEve
+nt.STARTED
+21:59:20.948 [Thread-1] DEBUG n.k.log.commons_logging_test_bundle - JCL-debug-log=Thu Dec 18 21:59:20 CET 2008
+21:59:20.949 [Thread-1] INFO  n.k.log.commons_logging_test_bundle - JCL-info-log=Thu Dec 18 21:59:20 CET 2008
+21:59:20.949 [Thread-1] WARN  n.k.log.commons_logging_test_bundle - JCL-warning-log=Thu Dec 18 21:59:20 CET 2008
+21:59:20.950 [Thread-1] ERROR n.k.log.commons_logging_test_bundle - JCL-error-log=Thu Dec 18 21:59:20 CET 2008
+21:59:20.956 [Thread-1] DEBUG n.k.log.commons_logging_test_bundle - JCL-debug-log=Thu Dec 18 21:59:20 CET 2008
+java.lang.Exception: An EXCEPTION!
+        at commons_logging_test_bundle.Activator$1.run(Unknown Source) [na:na]
+        at java.lang.Thread.run(Unknown Source) [na:1.6.0_07]
+21:59:20.969 [Thread-1] INFO  n.k.log.commons_logging_test_bundle - JCL-info-log=Thu Dec 18 21:59:20 CET 2008
+java.lang.Exception: An EXCEPTION!
+        at commons_logging_test_bundle.Activator$1.run(Unknown Source) [na:na]
+        at java.lang.Thread.run(Unknown Source) [na:1.6.0_07]
+21:59:20.974 [Thread-1] WARN  n.k.log.commons_logging_test_bundle - JCL-warning-log=Thu Dec 18 21:59:20 CET 2008
+java.lang.Exception: An EXCEPTION!
+        at commons_logging_test_bundle.Activator$1.run(Unknown Source) [na:na]
+        at java.lang.Thread.run(Unknown Source) [na:1.6.0_07]
+21:59:20.996 [Thread-1] ERROR n.k.log.commons_logging_test_bundle - JCL-error-log=Thu Dec 18 21:59:20 CET 2008
+java.lang.Exception: An EXCEPTION!
+        at commons_logging_test_bundle.Activator$1.run(Unknown Source) [na:na]
+        at java.lang.Thread.run(Unknown Source) [na:1.6.0_07]
+stop 6
+-> 21:59:23.223 [Thread-1] INFO  n.k.log.commons_logging_test_bundle - BundleEvent.STOPPED
+shutdown
+->
+c:\temp\felix-1.4.0>
+
+
+}}}
+= Download the libraries =
+
+You can download the bundles and the libraries directly from the google code project page:
+ * [http://code.google.com/p/osgi-logging/downloads/list]
+
+The "normal" commons-logging and slf4j jar should be downloaded from their respective web sites:
+ * [http://commons.apache.org/logging/ Apache Commons Logging]
+ * [http://www.slf4j.org/ SLF4J]
+
+You can grab or browse the source code on the appropriate google-code page:
+ * [http://code.google.com/p/osgi-logging/source/checkout]

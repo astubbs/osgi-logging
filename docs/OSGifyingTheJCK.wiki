@@ -1,0 +1,122 @@
+#summary OSGI-fying the apache commons-logging API (2/4)
+
+There's a funny FUD that has been going on for some time, stating that the apache commons-logging library is definitely not compliant with OSGI, because of some surprising classloading issue. This even reached the apache commons wiki, which states the following:
+
+[http://sites.google.com/site/osgistuff/Home/commons-logging-fud.png]
+
+Of course there's no point in making an OSGI bundle out of the commons-logging jar, because that's not how it is supposed to be used in this context. The commons-logging library provides a facade that should be included in the internal classpath of an OSGI bundle, there's no point in turning it into a service: there's already a standard OSGI Logging service, which API is fully described in the OSGI specifications.
+
+I've found some traces of similar statements around the internet, and of course no factual proof that apache-commons is not OSGI-compliant, except some clueless people whining on some newsgroups (see http://wiki.apache.org/commons/Commons_Logging_FUD for a discussion of the FUD). This seemed rather odd to me, specially when considering the clean design of the commons-logging library. It's just sad to see people trashing some good piece of software just for the purpose of pushing their own solution.
+
+Anyway, for the people interested, I developped an OSGI-compliant LogFactory that forwards the log to the OSGI LogService. There was no difficulty in that, and was done and tested in a couple of hours.
+
+Is it a hack? Absolutely not. Did it require any change in the commons-logging source code? Not at all. The LogFactory used by commons-logging to create the Log object can be redefined using a system property, namely org.apache.commons.logging.LogFactory. Just set this property to the name of a class implementing LogFactory, and you're done.
+
+Well, almost done. You also need to provide the BundleContext to the LogFactory, so that it can find the currently active LogService. The implementation I provide does the following:
+
+    * It uses the currently active LogService as the backend for the Log implementation.
+    * It registers as a ServiceListener, to be able to behave correctly if the LogService is stopped, or if another one is registered. If at some point, the LogService is not active anymore, it tries to find another one, and if none is available, it just ignores any logging until a LogService object is registered back.
+
+Here is an example of how the OSGI logging must be initialized in the BundleActivator:
+
+{{{
+public class Activator implements BundleActivator 
+{
+	private Log log = LogFactory.getLog(Activator.class);
+
+	public void start(BundleContext context) throws Exception 
+	{
+		// Here is how the LogService is retrieved and set up
+		net.kornr.osgi.jcl.LogOSGIFactory.initOSGI(context);
+		// or, to specify a service reference: 
+		// net.kornr.osgi.jcl.LogOSGIFactory.initOSGI(context, someServiceReference);
+
+		// If there is no LogService available, the line below does nothing
+		log.info("Hello World!!");
+	}
+
+	public void stop(BundleContext context) throws Exception {
+		// The logging is available 'til the very end
+		log.info("Goodbye World!!");
+	}
+
+}
+}}}
+
+That's the only specific code required, and IMHO it makes sense to have the BundleActivator do this kind of initialization.
+
+Other classes use the logging system as usual:
+
+{{{
+public class FooBar
+{
+   private Log log = LogFactory.getLog(FooBar.class);
+   
+   public void test()
+   {
+         log.debug("A dummy log...");
+   }
+}
+}}}
+
+Unlike the commons-logging API, the LogService object does not provide a slot to specify the class emitting the log. Instead, OSGI provides to the LogService a reference to the emitting Bundle, but also additionally offers a ServiceReference argument. If your Bundle registers one single Service, you can provide it to the LogService by initializing the LogOSGIFactory with a ServiceReference object:
+
+{{{
+LogOSGIFactory.initOSGI(BundleContext context, ServiceReference ref)
+}}}
+
+Once you have set up your bundle to use apache commons logging, you'll probably need a LogService back-end. Please check my previous article for some pointers.
+Structure of a project
+
+The apache-commons-logging jar as well as the commons-logging-osgi jar must be in the bundles' classpath, not in the common classpath of the osgi server.
+
+{{{
+Manifest-Version: 1.0
+Bundle-ManifestVersion: 2
+Bundle-Name: TestJCL1 Plug-in
+Bundle-SymbolicName: TestJCL1
+Bundle-Version: 1.0.0
+Bundle-Activator: testjcl1.Activator
+Import-Package: org.osgi.framework;version="1.3.0",
+ org.osgi.service.log
+Bundle-RequiredExecutionEnvironment: JavaSE-1.6
+Bundle-ClassPath: ., commons-logging-1.1.1.jar, commons-logging-osgi-20081214.jar
+}}}
+
+To use the library, in 4 simple steps (excerpt from readme file):
+
+ #. Add the commons-logging-osgi-XXXX.jar to your runtime classpath.
+ #. Add to the System properties of the JVM the following setting:
+org.apache.commons.logging.LogFactory=net.kornr.osgi.jcl.LogOSGIFactory
+For instance, add the following to your java command line:
+-Dorg.apache.commons.logging.LogFactory=net.kornr.osgi.jcl.LogOSGIFactory
+This informs the apache commons logging API to use the
+OSGI-compliant LogFactory provided instead of using its default
+settings.
+ #. Add in the Activator class of your bundle the following line:
+{{{
+public void start(BundleContext context) throws Exception {
+...
+net.kornr.osgi.jcl.LogOSGIFactory.initOSGI(context);
+...
+}
+}}}
+This bootstraps the LogFactory with the BundleContext, so that it can
+get a reference to a LogService object.
+ #. Add the commons-logging-osgi-XXXX.jar to the Bundle-ClassPath entry of your MANIFEST.MF
+
+That's it.
+
+=== Download ===
+
+The software is provided under the Apache License, Version 2.0
+
+Update on 2008-12-15: Some OSGI container do not raise an exception when using a stopped service, preventing the logger to update its reference accordingly. I modified the source code so that it always use the up-to-date log service reference. There is no impact on performance with this change.
+
+    * The binary jar: commons-logging-osgi-20081214.jar
+    * Source code: commons-logging-osgi-src-20081214.tar.gz
+
+Previous version:
+
+    * The binary jar: commons-logging-osgi-20081214.jar
+    * Source code: commons-logging-osgi-src-20081214.tar.gz

@@ -1,0 +1,129 @@
+#summary Building a full-featured OSGI logging back-end (3/4)
+
+In the previous articles of the series, we've seen how to link standard logs from the apache-commons logging library to the OSGi LogService, and how to create a simple service that reads the LogReaderService to display the log entries. Now it's time to build a full-featured back-end for our OSGi logs.
+
+I've used the Logback library, but it can easily be transposed to any similar logging system, be it log4j or the jdk logging system (and in fact, any system supported by slf4j).
+
+= The big picture =
+
+Most of the work is done by one single class, the LogbackAdaptor, which is basically a LogListener that manages a bunch of Logger objects. Every time a LogEvent is received, it retrieves a Logger associated to the event's bundle, or create a new one if there's none. It then just calls the appropriate Logger method: debug() info(), warn(), or error(). If there's an exception carried by the event, the Logger's methods with an exception in the signature are used.
+
+[http://sites.google.com/site/osgistuff/Home/osgi-logback-simple.png]
+
+The source code
+
+The source code is available at the bottom of this article, but the LogbackAdaptor source code is so simple that it's worth showing it. The only other class in the package is the Activator that keeps track of the LogReaderService instances, and registers the LogbackAdaptor to them.
+
+{{{
+package net.kornr.log;
+
+import java.util.HashMap;
+import org.osgi.service.log.LogEntry;
+import org.osgi.service.log.LogListener;
+import org.osgi.service.log.LogService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * The LogbackAdaptor converts the LogEntry objects it receives into calls to the slf4j 
+ * loggers (the native interface of logback).
+ * 
+ * @author Rodrigo Reyes
+ *
+ */
+public class LogbackAdaptor implements LogListener
+{
+	HashMap<Long, org.slf4j.Logger> m_loggers = new HashMap<Long, org.slf4j.Logger>(); 
+
+	/**
+	 * This methods is called by the LogReaderService, and dispatch them to 
+	 * a set of Loggers, created with 
+	 */
+	public void logged(LogEntry log) 
+	{
+		if ((log.getBundle() == null) || (log.getBundle().getSymbolicName() == null))
+		{
+			// if there is no name, it's probably the framework emitting a log
+			// This should not happen and we don't want to log something anonymous
+			return; 
+		}
+		
+		// Retrieve a Logger object, or create it if none exists.
+		Logger logger = m_loggers.get(log.getBundle().getBundleId());
+		if (logger == null)
+		{
+			logger = LoggerFactory.getLogger(log.getBundle().getSymbolicName());
+			m_loggers.put(log.getBundle().getBundleId(), logger);
+		}
+
+		// If there is an exception available, use it, otherwise just log 
+		// the message
+		if (log.getException() != null)
+		{
+			switch(log.getLevel())
+			{
+			case LogService.LOG_DEBUG:
+				logger.debug(log.getMessage(), log.getException());
+				break;
+			case LogService.LOG_INFO:
+				logger.info(log.getMessage(), log.getException());
+				break;
+			case LogService.LOG_WARNING:
+				logger.warn(log.getMessage(), log.getException());
+				break;
+			case LogService.LOG_ERROR:
+				logger.error(log.getMessage(), log.getException());
+				break;
+			}
+		}
+		else
+		{
+			switch(log.getLevel())
+			{
+			case LogService.LOG_DEBUG:
+				logger.debug(log.getMessage());
+				break;
+			case LogService.LOG_INFO:
+				logger.info(log.getMessage());
+				break;
+			case LogService.LOG_WARNING:
+				logger.warn(log.getMessage());
+				break;
+			case LogService.LOG_ERROR:
+				logger.error(log.getMessage());
+				break;
+			}			
+		}
+	}
+}
+}}}
+
+= Configuring logback = 
+
+The easiest way to configure Logback is to create an xml configuration and place it in a relevant location. Then, define the logback.configurationFile property with the location of the configuration file. For instance on the command line:
+
+{{{
+java -Dlogback.configurationFile=/some/location/logback.xml ...
+}}}
+
+Examples and documentation on the configuration are available in the logback manual.
+Configuring the bundle
+
+The bundle is just a matter of specifying the Bundle-Classpath with the logback-related jars.
+
+{{{
+Manifest-Version: 1.0
+Bundle-ManifestVersion: 2
+Bundle-Name: LogBackend
+Bundle-SymbolicName: LogBackend
+Bundle-Version: 1.0.0
+Bundle-Activator: net.kornr.log.LogBackendActivator
+Import-Package: org.osgi.framework,
+ org.osgi.service.log,
+ org.osgi.util.tracker
+Bundle-RequiredExecutionEnvironment: J2SE-1.5
+Bundle-ClassPath: libs/logback-classic-0.9.13.jar,
+ libs/logback-core-0.9.13.jar,
+ .,
+ libs/slf4j-api-1.5.6.jar
+}}}
